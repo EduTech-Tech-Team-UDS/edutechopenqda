@@ -75,6 +75,9 @@ services:
             # Honour X-Forwarded-Proto from the reverse proxy so Laravel
             # knows it is being served over HTTPS.
             TRUSTED_PROXIES: '${TRUSTED_PROXIES:-*}'
+            # Signs the ALTCHA proof-of-work challenge on the registration
+            # form. Registration rejects every submission without it.
+            ALTCHA_HMAC_KEY: '${ALTCHA_HMAC_KEY}'
             MAIL_MAILER: '${MAIL_MAILER:-smtp}'
             MAIL_HOST: '${MAIL_HOST}'
             MAIL_PORT: '${MAIL_PORT:-587}'
