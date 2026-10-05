@@ -13,11 +13,51 @@ OpenQDA includes a comprehensive backup script that can be scheduled to run auto
 > Please note, that deployment via Docker is different from the Docker setup,
 described in the [docker installation guide for local development!](../installation/docker.md)!
 
-We will provide a comprehensive guide very soon. 
-Until then, we would like to point you to the following resources:
+A production-ready container stack lives at the repository root
+(`docker-compose.prod.yml`) and in `web/docker/production/`. It builds the
+Vue frontend and PHP dependencies, then runs nginx + php-fpm + the Reverb
+websocket server + a queue worker inside a single app container,
+supervised by `supervisord`. MySQL, Redis and the `convert-to-html`
+transform service run as separate containers on the same network.
 
-- https://docs.docker.com/guides/frameworks/laravel/
-- https://github.com/laradock/laradock
+### Quick start
+
+```bash
+# from the repository root
+cp web/docker/production/production.env.example web/.env
+# edit web/.env: set DB_*, REDIS_PASSWORD, REVERB_* and MAIL_* for your environment
+
+docker compose -f docker-compose.prod.yml build
+
+# generate and store an application key before first boot
+docker compose -f docker-compose.prod.yml run --rm app php artisan key:generate --show
+# paste the generated value into APP_KEY in web/.env
+
+docker compose -f docker-compose.prod.yml up -d
+```
+
+The app container runs database migrations automatically on startup
+(`RUN_MIGRATIONS=true` in the env file controls this). Application,
+Reverb and queue-worker logs are written to stdout/stderr and are visible
+via `docker compose -f docker-compose.prod.yml logs -f app`.
+
+Put a reverse proxy (nginx, Caddy, Traefik) in front of the stack to
+terminate TLS and forward both the HTTP port (`APP_PORT`, default `80`)
+and the Reverb websocket port (`REVERB_PORT`, default `8080`) to the
+`app` service. See the
+[SSL Certificate Troubleshooting Guide](../troubleshooting/ssl-certificates.md)
+for websocket-specific proxy configuration.
+
+### Updating
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml build app
+docker compose -f docker-compose.prod.yml up -d app
+```
+
+Pending migrations run automatically the next time the `app` container
+starts.
 
 ## Manual
 

@@ -1,0 +1,104 @@
+#
+# Production deployment stack for OpenQDA.
+#
+# This is different from `web/docker-compose.yml`, which is the Laravel
+# Sail setup used for local development only. See docs/deployment/deployment.md.
+#
+# Usage:
+#   cp web/docker/production/production.env.example web/.env
+#   # edit web/.env with real production secrets/hostnames, then generate APP_KEY:
+#   docker compose -f docker-compose.prod.yml run --rm app php artisan key:generate --show
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+name: openqda
+
+services:
+    app:
+        build:
+            context: ./web
+            dockerfile: ./docker/production/Dockerfile
+            args:
+                WWWUSER: '${WWWUSER:-1000}'
+                WWWGROUP: '${WWWGROUP:-1000}'
+        image: openqda-web:${APP_VERSION:-latest}
+        restart: unless-stopped
+        env_file:
+            - ./web/.env
+        ports:
+            - '${APP_PORT:-80}:80'
+            - '${REVERB_PORT:-8080}:8080'
+        volumes:
+            - app-storage:/var/www/html/storage
+        networks:
+            - openqda
+        depends_on:
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost/']
+            interval: 30s
+            timeout: 10s
+            retries: 5
+            start_period: 30s
+
+    mysql:
+        image: 'mysql:8.0'
+        restart: unless-stopped
+        # MYSQL_ROOT_PASSWORD / MYSQL_DATABASE / MYSQL_USER / MYSQL_PASSWORD
+        # are read from web/.env, keeping credentials in one file.
+        env_file:
+            - ./web/.env
+        volumes:
+            - mysql-data:/var/lib/mysql
+        networks:
+            - openqda
+        healthcheck:
+            test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -p"$$MYSQL_ROOT_PASSWORD" --silent']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    redis:
+        image: 'redis:7-alpine'
+        restart: unless-stopped
+        env_file:
+            - ./web/.env
+        # REDIS_PASSWORD is expanded by the container's own shell at
+        # startup (from env_file above), not by docker compose.
+        command: ['sh', '-c', 'redis-server --save 60 1 --requirepass "$$REDIS_PASSWORD"']
+        volumes:
+            - redis-data:/data
+        networks:
+            - openqda
+        healthcheck:
+            test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping']
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    plugin.transform.converthtml:
+        container_name: plugin-transform-convert-html
+        build:
+            context: ./services/transform/convert-to-html
+            dockerfile: Dockerfile
+        restart: unless-stopped
+        volumes:
+            - transform-storage:/app/storage
+        networks:
+            - openqda
+
+networks:
+    openqda:
+        driver: bridge
+
+volumes:
+    mysql-data:
+        driver: local
+    redis-data:
+        driver: local
+    app-storage:
+        driver: local
+    transform-storage:
+        driver: local
