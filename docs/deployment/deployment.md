@@ -20,44 +20,69 @@ websocket server + a queue worker inside a single app container,
 supervised by `supervisord`. MySQL, Redis and the `convert-to-html`
 transform service run as separate containers on the same network.
 
-### Quick start
+All configuration comes from environment variables substituted directly
+into `docker-compose.prod.yml` — there is no `.env` file baked into the
+image or expected inside the repository checkout. This makes the stack
+deployable either from the CLI or straight from a Git repository in
+Portainer (or similar tools), without needing to get a secrets file onto
+the host out-of-band.
+
+### Option A: Portainer (Stacks → Git repository)
+
+1. In Portainer, go to **Stacks → Add stack**, choose **Repository**, and
+   point it at this repo with reference `refs/heads/prod` (or whichever
+   branch you deploy from) and compose path `docker-compose.prod.yml`.
+2. Open `web/docker/production/production.env.example`, copy its
+   contents, and paste them into the stack's **Environment variables**
+   panel (use "Advanced mode" to paste raw `.env` text in one go).
+3. Fill in real values: `APP_URL`, `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`,
+   `REDIS_PASSWORD`, `REVERB_*`, `MAIL_*`. Leave `APP_KEY` empty for now.
+4. Deploy the stack once so the `app` image gets built, then open a
+   console on the `app` container (or an exec shell) and run
+   `php artisan key:generate --show`. Copy the output back into the
+   stack's `APP_KEY` environment variable and redeploy.
+5. Adjust `APP_PORT` / `REVERB_LOCAL_PORT` if the defaults (`8082` /
+   `8083`) collide with something else already running on the host.
+
+### Option B: CLI
 
 ```bash
 # from the repository root
-cp web/docker/production/production.env.example web/.env
-# edit web/.env: set DB_*, REDIS_PASSWORD, REVERB_* and MAIL_* for your environment
+cp web/docker/production/production.env.example .env
+# edit .env: set DB_*, REDIS_PASSWORD, REVERB_* and MAIL_* for your environment
 
-docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml --env-file .env build
 
 # generate and store an application key before first boot
-docker compose -f docker-compose.prod.yml run --rm app php artisan key:generate --show
-# paste the generated value into APP_KEY in web/.env
+docker compose -f docker-compose.prod.yml --env-file .env run --rm app php artisan key:generate --show
+# paste the generated value into APP_KEY in .env
 
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml --env-file .env up -d
 ```
 
+### Logs, migrations and reverse proxy
+
 The app container runs database migrations automatically on startup
-(`RUN_MIGRATIONS=true` in the env file controls this). Application,
-Reverb and queue-worker logs are written to stdout/stderr and are visible
-via `docker compose -f docker-compose.prod.yml logs -f app`.
+(`RUN_MIGRATIONS=true` controls this). Application, Reverb and
+queue-worker logs are written to stdout/stderr, visible via
+`docker compose -f docker-compose.prod.yml logs -f app` or Portainer's
+container logs view.
 
 Put a reverse proxy (nginx, Caddy, Traefik) in front of the stack to
-terminate TLS and forward both the HTTP port (`APP_PORT`, default `80`)
-and the Reverb websocket port (`REVERB_PORT`, default `8080`) to the
-`app` service. See the
+terminate TLS and forward your domain to the `app` service's published
+ports (`APP_PORT` for HTTP, `REVERB_LOCAL_PORT` for the websocket
+upgrade). See the
 [SSL Certificate Troubleshooting Guide](../troubleshooting/ssl-certificates.md)
 for websocket-specific proxy configuration.
 
 ### Updating
 
-```bash
-git pull
-docker compose -f docker-compose.prod.yml build app
-docker compose -f docker-compose.prod.yml up -d app
-```
-
-Pending migrations run automatically the next time the `app` container
-starts.
+Pushing to the deployed branch and redeploying the stack (via Portainer's
+"pull and redeploy", a webhook, or `git pull && docker compose -f
+docker-compose.prod.yml build app && docker compose -f
+docker-compose.prod.yml up -d app` on the CLI) rebuilds the image and
+runs any pending migrations automatically on the next `app` container
+start.
 
 ## Manual
 
