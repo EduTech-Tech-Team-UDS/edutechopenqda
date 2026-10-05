@@ -91,9 +91,12 @@ services:
             RTFPASSWORD: '${RTFPASSWORD:-openqda-internal}'
             RTFFORMATS: '${RTFFORMATS:-doc,docx,odt,rtf,html,md}'
             RUN_MIGRATIONS: '${RUN_MIGRATIONS:-true}'
+        # Bound to loopback only: the reverse proxy terminates TLS and
+        # forwards from the host, so these must not be reachable from the
+        # internet directly (which would bypass HTTPS entirely).
         ports:
-            - '${APP_PORT:-8082}:80'
-            - '${REVERB_LOCAL_PORT:-8083}:8080'
+            - '127.0.0.1:${APP_PORT:-8082}:80'
+            - '127.0.0.1:${REVERB_LOCAL_PORT:-8083}:8080'
         volumes:
             - app-storage:/var/www/html/storage
         networks:
