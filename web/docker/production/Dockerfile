@@ -3,7 +3,7 @@
 #
 # Production image for the OpenQDA web application.
 #
-# Builds frontend assets and PHP dependencies in isolated stages, then
+# Builds PHP dependencies and frontend assets in isolated stages, then
 # assembles a final runtime image running nginx + php-fpm + the Reverb
 # websocket server + a queue worker, all supervised by supervisord.
 #
@@ -15,69 +15,18 @@ ARG PHP_VERSION=8.3
 ARG NODE_VERSION=20
 
 # ---------------------------------------------------------------------------
-# Stage 1: build frontend assets (Vite/Vue)
+# Stage 1: PHP base - the platform both Composer and the runtime use
+#
+# Composer resolves platform requirements against the PHP it runs on, so
+# dependencies must be installed on the same PHP version and extension set
+# that will actually serve the app. (The `composer:2` image tracks the
+# newest PHP, which this project's lock file does not allow.)
 # ---------------------------------------------------------------------------
-FROM node:${NODE_VERSION}-alpine AS frontend
+FROM php:${PHP_VERSION}-fpm-alpine AS php-base
 
-WORKDIR /app
-
-COPY package.json package-lock.json ./
-COPY plugins ./plugins
-RUN npm ci
-
-COPY resources ./resources
-COPY public ./public
-COPY vite.config.js safarivite.config.js jsdoc.conf.json ./
-
-RUN npm run build
-
-# ---------------------------------------------------------------------------
-# Stage 2: install PHP dependencies
-# ---------------------------------------------------------------------------
-FROM composer:2 AS vendor
-
-WORKDIR /app
-
-COPY composer.json composer.lock ./
-RUN composer install \
-    --no-dev \
-    --no-scripts \
-    --no-autoloader \
-    --no-interaction \
-    --prefer-dist
-
-COPY . .
-
-RUN composer install \
-    --no-dev \
-    --no-interaction \
-    --prefer-dist \
-    --optimize-autoloader \
-    && composer clear-cache
-
-# ---------------------------------------------------------------------------
-# Stage 3: runtime image
-# ---------------------------------------------------------------------------
-FROM php:${PHP_VERSION}-fpm-alpine AS runtime
-
-LABEL org.opencontainers.image.title="OpenQDA" \
-      org.opencontainers.image.description="OpenQDA web application (Laravel + Vue)"
-
-ARG WWWUSER=1000
-ARG WWWGROUP=1000
-
-ENV TZ=UTC \
-    APP_ENV=production \
-    SUPERVISOR_PHP_USER=www-data
-
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
-
-# System packages, nginx, supervisor and PHP build dependencies
 RUN apk add --no-cache \
-        nginx \
-        supervisor \
-        curl \
         bash \
+        curl \
         tzdata \
         icu-data-full \
         libzip \
@@ -114,8 +63,101 @@ RUN apk add --no-cache \
     && apk del .build-deps \
     && rm -rf /tmp/pear /var/cache/apk/*
 
+# ---------------------------------------------------------------------------
+# Stage 2: install PHP dependencies
+#
+# Runs before the frontend stage because the asset build reads from
+# vendor/ (see below). The classic (non-BuildKit) builder that Portainer
+# uses can only reference stages defined earlier, so the order matters.
+# ---------------------------------------------------------------------------
+FROM php-base AS vendor
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /app
+
+COPY composer.json composer.lock ./
+RUN composer install \
+    --no-dev \
+    --no-scripts \
+    --no-autoloader \
+    --no-interaction \
+    --prefer-dist
+
+COPY . .
+
+# --no-scripts: package:discover would need a bootable app and a writable
+# bootstrap/cache. Laravel regenerates the package manifest on the first
+# artisan call in the runtime image instead.
+RUN composer install \
+    --no-dev \
+    --no-scripts \
+    --no-interaction \
+    --prefer-dist \
+    --optimize-autoloader \
+    && composer clear-cache
+
+# ---------------------------------------------------------------------------
+# Stage 3: build frontend assets (Vite/Vue)
+#
+# This stage needs the Composer vendor directory: the frontend imports
+# Ziggy's JS and Jetstream's Vue components straight out of vendor/, and
+# Tailwind's @source globs scan Blade files there too.
+# ---------------------------------------------------------------------------
+FROM node:${NODE_VERSION}-alpine AS frontend
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY plugins ./plugins
+RUN npm ci
+
+COPY resources ./resources
+COPY public ./public
+# plugins.js is the client plugin registry, imported from
+# resources/js/Pages/analysis/visualization/useVisualizerPlugins.js.
+COPY vite.config.js safarivite.config.js jsdoc.conf.json plugins.js ./
+COPY --from=vendor /app/vendor ./vendor
+
+# Vite inlines VITE_* values into the JS bundle at build time, so the
+# websocket (Reverb) client settings must be known here - setting them on
+# the running container has no effect. Changing the public Reverb
+# host/port/scheme therefore requires rebuilding this image.
+ARG VITE_REVERB_APP_KEY
+ARG VITE_REVERB_HOST
+ARG VITE_REVERB_PORT=443
+ARG VITE_REVERB_SCHEME=https
+ARG VITE_DEBUG_CLIENT=false
+ARG VITE_NOTIFICATION=""
+
+ENV VITE_REVERB_APP_KEY=${VITE_REVERB_APP_KEY} \
+    VITE_REVERB_HOST=${VITE_REVERB_HOST} \
+    VITE_REVERB_PORT=${VITE_REVERB_PORT} \
+    VITE_REVERB_SCHEME=${VITE_REVERB_SCHEME} \
+    VITE_DEBUG_CLIENT=${VITE_DEBUG_CLIENT} \
+    VITE_NOTIFICATION=${VITE_NOTIFICATION}
+
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 4: runtime image
+# ---------------------------------------------------------------------------
+FROM php-base AS runtime
+
+LABEL org.opencontainers.image.title="OpenQDA" \
+      org.opencontainers.image.description="OpenQDA web application (Laravel + Vue)"
+
+ARG WWWUSER=1000
+ARG WWWGROUP=1000
+
+ENV TZ=UTC \
+    APP_ENV=production
+
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone \
+    && apk add --no-cache nginx supervisor
+
 # Align the www-data user/group with the host UID/GID when provided, so
-# bind-mounted volumes (e.g. storage/) keep sane ownership.
+# volume contents keep sane ownership.
 RUN deluser www-data 2>/dev/null || true; \
     delgroup www-data 2>/dev/null || true; \
     addgroup -g ${WWWGROUP} www-data && \

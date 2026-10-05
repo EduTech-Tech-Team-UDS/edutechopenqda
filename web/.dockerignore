@@ -10,3 +10,11 @@ Dockerfile
 **/.git
 **/.vscode
 **/docker
+# The production image copies its own config out of docker/production, so
+# that subtree must stay in the build context despite the rule above.
+!docker/production
+node_modules
+vendor
+.env
+storage/logs
+.phpunit.cache

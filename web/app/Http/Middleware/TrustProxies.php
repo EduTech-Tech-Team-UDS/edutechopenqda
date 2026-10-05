@@ -14,6 +14,15 @@ class TrustProxies extends Middleware
      */
     protected $proxies;
 
+    public function __construct()
+    {
+        // Behind a reverse proxy (e.g. the containerised deployment), the
+        // X-Forwarded-* headers are the only way the app can tell it is
+        // being served over HTTPS. Without this, URL generation falls back
+        // to http:// and secure session cookies are never sent.
+        $this->proxies = env('TRUSTED_PROXIES');
+    }
+
     /**
      * The headers that should be used to detect proxies.
      *
