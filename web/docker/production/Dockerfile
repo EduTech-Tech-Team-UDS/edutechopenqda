@@ -175,9 +175,14 @@ COPY docker/production/nginx.conf /etc/nginx/nginx.conf
 COPY docker/production/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY docker/production/entrypoint.sh /usr/local/bin/entrypoint.sh
 
+# nginx runs as www-data (see nginx.conf), but Alpine's nginx package gives
+# its temp dirs to the `nginx` user. Request bodies over
+# client_body_buffer_size (16k) are buffered to /var/lib/nginx/tmp, so
+# without this every larger upload fails with a 500.
 RUN chmod +x /usr/local/bin/entrypoint.sh \
-    && mkdir -p /var/log/supervisor /run/nginx storage/logs storage/framework/{cache,sessions,testing,views} bootstrap/cache \
-    && chown -R www-data:www-data storage bootstrap/cache /var/log/supervisor /run/nginx
+    && mkdir -p /var/log/supervisor /run/nginx /var/lib/nginx/tmp storage/logs storage/framework/{cache,sessions,testing,views} bootstrap/cache \
+    && chown -R www-data:www-data storage bootstrap/cache /var/log/supervisor /run/nginx /var/lib/nginx/tmp \
+    && chmod 755 /var/lib/nginx
 
 EXPOSE 80 8080
 
