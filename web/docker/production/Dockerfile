@@ -11,7 +11,7 @@
 #   docker build -f docker/production/Dockerfile -t openqda-web:latest .
 #
 
-ARG PHP_VERSION=8.3
+ARG PHP_VERSION=8.4
 ARG NODE_VERSION=20
 
 # ---------------------------------------------------------------------------
@@ -29,6 +29,7 @@ RUN apk add --no-cache \
         curl \
         tzdata \
         icu-data-full \
+        icu-libs \
         libzip \
         libpng \
         libjpeg-turbo \
